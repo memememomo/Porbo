@@ -26,6 +26,7 @@ sub new {
         no_delay => 1,
         timeout  => 300,
         read_chunk_size => 4096,
+        server_software => 'Porbo',
         @args,
     }, $class;
 }
@@ -117,7 +118,6 @@ sub _accept_handler {
         });
         $handle->on_read(sub {
             my ($hdl) = @_;
-            undef $handle;
             my $env = {
                 SERVER_NAME => $$listen_host_r,
                 SERVER_PORT => $$listen_port_r,
@@ -125,7 +125,7 @@ sub _accept_handler {
                 REMOTE_ADDR => $peer_host,
                 'psgi.version' => [ 1, 0 ],
                 'psgi.errors'  => *STDERR,
-                'psgi.url_scheme' => 'https',
+                'psgi.url_scheme' => $ssl ? 'https' : 'http',
                 'psgi.nonblocking' => Plack::Util::TRUE,
                 'psgi.streaming' => Plack::Util::TRUE,
                 'psgi.run_once' => Plack::Util::FALSE,
@@ -136,6 +136,10 @@ sub _accept_handler {
                 'psgix.input.buffered' => Plack::Util::TRUE,
             };
             my $buf = $hdl->rbuf;
+            if ($buf !~ /^(.*?\x0d?\x0a\x0d?\x0a)/s) {
+                return;
+            }
+            undef $handle;
             parse_http_request($buf, $env);
             $buf =~ s/^(.*?\x0d?\x0a\x0d?\x0a)//s;
             if (!$buf) {
