@@ -108,16 +108,21 @@ sub _accept_handler {
             };
         }
 
-        my $handle = AnyEvent::Handle->new(
+        my $handle;
+        $handle = AnyEvent::Handle->new(
             fh => $sock,
+            on_error => sub {
+                $handle->destroy;
+            },
+            on_eof => sub {
+                $handle->destroy;
+            },
             %args,
         );
-        $handle->on_error(sub {
-            my $err = $_[2];
-            $self->{exit_guard}->end;
-        });
-        $handle->on_read(sub {
-            my ($hdl) = @_;
+
+        $handle->push_read(line => "\015\012\015\012", sub {
+            my ($hdl, $header) = @_;
+
             my $env = {
                 SERVER_NAME => $$listen_host_r,
                 SERVER_PORT => $$listen_port_r,
@@ -135,32 +140,51 @@ sub _accept_handler {
                 'psgix.io'          => $hdl->fh,
                 'psgix.input.buffered' => Plack::Util::TRUE,
             };
-            my $buf = $hdl->rbuf;
-            if ($buf !~ /^(.*?\x0d?\x0a\x0d?\x0a)/s) {
-                return;
-            }
-            undef $handle;
-            parse_http_request($buf, $env);
-            $buf =~ s/^(.*?\x0d?\x0a\x0d?\x0a)//s;
-            if (!$buf) {
-                $env->{'psgi.input'} = $null_io;
-            }
-            else {
-                open my $input, '<', \$buf;
-                $env->{'psgi.input'} = $input;
+
+            my $reqlen = parse_http_request($header."\015\012\015\012", $env);
+            if ($reqlen < 0) {
+                return $self->_bad_request($handle, 0);
             }
 
-            local $@;
             unless ( eval {
-                my $res = Plack::Util::run_app $app, $env;
-                $self->_write_psgi_response($hdl, $res);
+                $self->_run_app($app, $env, $handle);
                 1;
             }) {
                 my $disconnected = ($@ =~ /^client disconnected/);
-                $self->_bad_request($hdl, $disconnected);
+                $self->_bad_request($handle, $disconnected);
             }
         });
     };
+}
+
+sub _run_app {
+    my ($self, $app, $env, $handle) = @_;
+
+    unless ($env->{'psgi.input'}) {
+        if ($env->{CONTENT_LENGTH}) {
+            my $body;
+            $handle->on_read(sub {
+                $body .= $_[0]->rbuf;
+                $_[0]->rbuf = "";
+                if ($env->{CONTENT_LENGTH} <= length $body) {
+                    open my $input, '<', \$body;
+                    $env->{'psgi.input'} = $input;
+                    $self->_run_app($app, $env, $handle);
+                }
+            });
+            return;
+        } else {
+            $env->{'psgi.input'} = $null_io;
+        }
+    }
+
+    my $res = Plack::Util::run_app $app, $env;
+
+    if ( ref $res eq 'ARRAY' ) {
+        $self->_write_psgi_response($handle, $res);
+    } else {
+        croak("Unknown response type: $res");
+    }
 }
 
 sub _bad_request {
@@ -199,22 +223,31 @@ sub _format_headers {
 }
 
 sub _write_psgi_response {
-    my ($self, $handler, $res ) = @_;
+    my ($self, $handle, $res ) = @_;
 
-    my ( $status, $headers, $body ) = @$res;
+    if ( ref $res eq 'ARRAY' ) {
+        if ( scalar @$res == 0 ) {
+            # no response
+            $self->{exit_guard}->end;
+            return;
+        }
 
-    if (ref $res eq 'ARRAY') {
-        $self->_handle_response($res, $handler);
-    } elsif (ref $res eq 'CODE') {
-        $$res->(sub {
-            $self->_handle_response($_[0], $handler);
-        });
+        my ( $status, $headers, $body ) = @$res;
+
+        if (ref $res eq 'ARRAY') {
+            $self->_handle_response($res, $handle);
+            $self->{exit_guard}->end;
+        } elsif (ref $res eq 'CODE') {
+            $$res->(sub {
+                $self->_handle_response($_[0], $handle);
+            });
+            $self->{exit_guard}->end;
+        }
+    } else {
+        no warnings 'uninitialized';
+        warn "Unknown response type: $res";
+        return $self->_write_psgi_response($handle, [ 204, [], [] ]);
     }
-
-    #$handler->push_write(${$self->_format_headers($status, $headers)});
-    #$handler->push_write(join "", @$body);
-
-    #$self->{exit_guard}->end;
 }
 
 sub _handle_response {
@@ -265,7 +298,6 @@ sub _handle_response {
             write => sub { $self->write_all($handler, $_[0], $self->{timeout}) },
             close => sub { };
     }
-    $self->{exit_guard}->end;
 }
 
 sub write_all {
