@@ -1,10 +1,10 @@
 {
-   "abstract" : "It's new $module",
+   "abstract" : "Porbo HTTP development psgi server",
    "author" : [
       "Uchiko <memememomo@gmail.com>"
    ],
    "dynamic_config" : 0,
-   "generated_by" : "Minilla/v1.0.0, CPAN::Meta::Converter version 2.120921",
+   "generated_by" : "Minilla/v1.1.0, CPAN::Meta::Converter version 2.120921",
    "license" : [
       "perl_5"
    ],
@@ -44,6 +44,9 @@
       },
       "runtime" : {
          "requires" : {
+            "AnyEvent" : "0",
+            "Plack" : "0",
+            "URI" : "0",
             "perl" : "5.008005"
          }
       },
@@ -54,5 +57,16 @@
       }
    },
    "release_status" : "unstable",
+   "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/memememomo/Porbo/issues"
+      },
+      "homepage" : "https://github.com/memememomo/Porbo",
+      "repository" : {
+         "type" : "git",
+         "url" : "git://github.com/memememomo/Porbo.git",
+         "web" : "https://github.com/memememomo/Porbo"
+      }
+   },
    "version" : "0.01"
 }
