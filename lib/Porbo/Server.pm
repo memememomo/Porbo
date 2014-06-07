@@ -112,10 +112,10 @@ sub _accept_handler {
         $handle = AnyEvent::Handle->new(
             fh => $sock,
             on_error => sub {
-                $handle->destroy;
+                $handle->destroy if $handle;
             },
             on_eof => sub {
-                $handle->destroy;
+                $handle->destroy if $handle;
             },
             %args,
         );
@@ -153,6 +153,8 @@ sub _accept_handler {
                 my $disconnected = ($@ =~ /^client disconnected/);
                 $self->_bad_request($handle, $disconnected);
             }
+
+            undef $handle;
         });
     };
 }
@@ -225,24 +227,21 @@ sub _format_headers {
 sub _write_psgi_response {
     my ($self, $handle, $res ) = @_;
 
-    if ( ref $res eq 'ARRAY' ) {
+
+    if (ref $res eq 'ARRAY') {
         if ( scalar @$res == 0 ) {
             # no response
             $self->{exit_guard}->end;
             return;
         }
 
-        my ( $status, $headers, $body ) = @$res;
-
-        if (ref $res eq 'ARRAY') {
-            $self->_handle_response($res, $handle);
-            $self->{exit_guard}->end;
-        } elsif (ref $res eq 'CODE') {
-            $$res->(sub {
-                $self->_handle_response($_[0], $handle);
-            });
-            $self->{exit_guard}->end;
-        }
+        $self->_handle_response($res, $handle);
+        $self->{exit_guard}->end;
+    } elsif (ref $res eq 'CODE') {
+        $$res->(sub {
+            $self->_handle_response($_[0], $handle);
+        });
+        $self->{exit_guard}->end;
     } else {
         no warnings 'uninitialized';
         warn "Unknown response type: $res";
@@ -251,7 +250,7 @@ sub _write_psgi_response {
 }
 
 sub _handle_response {
-    my($self, $res, $handler) = @_;
+    my($self, $res, $handle) = @_;
  
     my @lines = (
         "Date: @{[HTTP::Date::time2str()]}\015\012",
@@ -266,7 +265,7 @@ sub _handle_response {
     unshift @lines, "HTTP/1.0 $res->[0] @{[ HTTP::Status::status_message($res->[0]) ]}\015\012";
     push @lines, "\015\012";
  
-    $self->write_all($handler, join('', @lines), $self->{timeout})
+    $self->write_all($handle, join('', @lines), $self->{timeout})
         or return;
  
     if (defined $res->[2]) {
@@ -278,7 +277,7 @@ sub _handle_response {
                 Plack::Util::foreach(
                     $res->[2],
                     sub {
-                        $self->write_all($handler, $_[0], $self->{timeout})
+                        $self->write_all($handle, $_[0], $self->{timeout})
                             or die "failed to send all data\n";
                     },
                 );
@@ -295,15 +294,15 @@ sub _handle_response {
         }
     } else {
         return Plack::Util::inline_object
-            write => sub { $self->write_all($handler, $_[0], $self->{timeout}) },
+            write => sub { $self->write_all($handle, $_[0], $self->{timeout}) },
             close => sub { };
     }
 }
 
 sub write_all {
-    my ($self, $handler, $buf, $timeout) = @_;
+    my ($self, $handle, $buf, $timeout) = @_;
     return 0 unless defined $buf;
-    $handler->push_write($buf);
+    $handle->push_write($buf);
     return length $buf;
 }
 
