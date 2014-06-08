@@ -238,17 +238,14 @@ sub _format_headers {
 sub _write_psgi_response {
     my ($self, $handle, $res) = @_;
 
-
     if (ref $res eq 'ARRAY') {
         if ( scalar @$res == 0 ) {
             # no response
-            $self->{exit_guard}->end;
+            $handle->destroy(); $self->{exit_guard}->end;
             return;
         }
 
-        my $ret = $self->_handle_response($res, $handle);
-        $self->{exit_guard}->end;
-        return $ret;
+        return $self->_handle_response($res, $handle);
     } else {
         no warnings 'uninitialized';
         warn "Unknown response type: $res";
@@ -271,38 +268,51 @@ sub _handle_response {
  
     unshift @lines, "HTTP/1.0 $res->[0] @{[ HTTP::Status::status_message($res->[0]) ]}\015\012";
     push @lines, "\015\012";
- 
+
     $self->write_all($handle, join('', @lines), $self->{timeout})
         or return;
- 
+
     if (defined $res->[2]) {
-        my $err;
-        my $done;
-        {
-            local $@;
-            eval {
+        return $self->_write_body($handle, $res->[2]);
+    } else {
+        return Plack::Util::inline_object
+            write => sub { $self->write_all($handle, $_[0], $self->{timeout}) },
+            close => sub { $handle->destroy(); $self->{exit_guard}->end },
+    }
+}
+
+sub _write_body {
+    my ( $self, $handle, $body ) = @_;
+
+    my $err;
+    my $done;
+    {
+        local $@;
+        eval {
+            if (ref $body) {
                 Plack::Util::foreach(
-                    $res->[2],
+                    $body,
                     sub {
                         $self->write_all($handle, $_[0], $self->{timeout})
                             or die "failed to send all data\n";
                     },
                 );
-                $done = 1;
-            };
-            $err = $@;
-        };
-        unless ($done) {
-            if ($err =~ /^failed to send all data\n/) {
-                return;
             } else {
-                die $err;
+                $self->write_all($handle, $body, $self->{timeout})
+                    or die "failed to send all data\n";
             }
+            $done = 1;
+            $handle->destroy(); $self->{exit_guard}->end;
+        };
+        $err = $@;
+    };
+    unless ($done) {
+        $handle->destroy(); $self->{exit_guard}->end;
+        if ($err =~ /^failed to send all data\n/) {
+            return;
+        } else {
+            die $err;
         }
-    } else {
-        return Plack::Util::inline_object
-            write => sub { $self->write_all($handle, $_[0], $self->{timeout}) },
-            close => sub { };
     }
 }
 
