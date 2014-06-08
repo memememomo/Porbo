@@ -120,7 +120,10 @@ sub _accept_handler {
         my $handle; $handle = AnyEvent::Handle->new(
             fh => $sock,
             on_error => sub {
-                $handle->destroy if $handle;
+                if ($handle) {
+                    $handle->destroy;
+                    $self->{exit_guard}->end;
+                }
             },
             %args,
         );
