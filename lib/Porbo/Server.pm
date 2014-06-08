@@ -14,6 +14,7 @@ use HTTP::Status;
 use HTTP::Date;
 use Plack::Util;
 use Plack::HTTPParser qw(parse_http_request);
+use Plack::Middleware::ContentLength;
 
 use constant DEBUG => $ENV{PORBO_DEBUG};
 
@@ -33,7 +34,13 @@ sub new {
 
 sub start_listen {
     my ($self, $app) = @_;
-    for my $listen (@{$self->{listen}}) {
+
+    my $listen = ref($self->{listen}) eq 'ARRAY' ? $self->{listen} : [];
+    if ($self->{host} && $self->{port}) {
+        push @$listen, "http://$self->{host}:$self->{port}";
+    }
+
+    for my $listen (@$listen) {
         push @{$self->{listen_guards}}, $self->_create_tcp_server($listen, $app);
     }
 }
@@ -87,6 +94,8 @@ sub _accept_prepare_handler {
 sub _accept_handler {
     my ($self, $app, $listen_host_r, $listen_port_r, $ssl) = @_;
 
+    $app = Plack::Middleware::ContentLength->wrap($app);
+
     return sub {
         my ( $sock, $peer_host, $peer_port ) = @_;
 
@@ -108,13 +117,9 @@ sub _accept_handler {
             };
         }
 
-        my $handle;
-        $handle = AnyEvent::Handle->new(
+        my $handle; $handle = AnyEvent::Handle->new(
             fh => $sock,
             on_error => sub {
-                $handle->destroy if $handle;
-            },
-            on_eof => sub {
                 $handle->destroy if $handle;
             },
             %args,
@@ -153,7 +158,6 @@ sub _accept_handler {
                 my $disconnected = ($@ =~ /^client disconnected/);
                 $self->_bad_request($handle, $disconnected);
             }
-
             undef $handle;
         });
     };
@@ -184,6 +188,10 @@ sub _run_app {
 
     if ( ref $res eq 'ARRAY' ) {
         $self->_write_psgi_response($handle, $res);
+    } elsif (ref $res eq 'CODE') {
+        $res->(sub {
+            $self->_write_psgi_response($handle, $_[0]);
+        });
     } else {
         croak("Unknown response type: $res");
     }
@@ -225,7 +233,7 @@ sub _format_headers {
 }
 
 sub _write_psgi_response {
-    my ($self, $handle, $res ) = @_;
+    my ($self, $handle, $res) = @_;
 
 
     if (ref $res eq 'ARRAY') {
@@ -235,13 +243,9 @@ sub _write_psgi_response {
             return;
         }
 
-        $self->_handle_response($res, $handle);
+        my $ret = $self->_handle_response($res, $handle);
         $self->{exit_guard}->end;
-    } elsif (ref $res eq 'CODE') {
-        $$res->(sub {
-            $self->_handle_response($_[0], $handle);
-        });
-        $self->{exit_guard}->end;
+        return $ret;
     } else {
         no warnings 'uninitialized';
         warn "Unknown response type: $res";
