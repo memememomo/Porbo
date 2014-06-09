@@ -1,7 +1,6 @@
 requires 'AnyEvent';
 requires 'HTTP::Status';
 requires 'Plack';
-requires 'URI';
 requires 'perl', '5.008001';
 
 on 'test' => sub {
