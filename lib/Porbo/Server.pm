@@ -35,12 +35,21 @@ sub new {
 sub start_listen {
     my ($self, $app) = @_;
 
-    my $listen = ref($self->{listen}) eq 'ARRAY' ? $self->{listen} : [];
-    if ($self->{host} && $self->{port}) {
-        push @$listen, "http://$self->{host}:$self->{port}";
+    my @listen;
+
+    if (ref($self->{listen}) eq 'ARRAY') {
+        push @listen, @{$self->{listen}};
     }
 
-    for my $listen (@$listen) {
+    if ($self->{host} && $self->{port}) {
+        push @listen, "http://$self->{host}:$self->{port}";
+    }
+
+    for my $listen (@listen) {
+        if ($listen =~ /^:(\d+)/) {
+            my $port = $1;
+            $listen = "http://127.0.0.1:$port/";
+        }
         push @{$self->{listen_guards}}, $self->_create_tcp_server($listen, $app);
     }
 }
