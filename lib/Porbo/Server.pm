@@ -42,13 +42,15 @@ sub start_listen {
     }
 
     if ($self->{host} && $self->{port}) {
-        push @listen, "http://$self->{host}:$self->{port}";
+        if ($self->{host} !~ /^http/) {
+            push @listen, "http://$self->{host}:$self->{port}";
+        }
     }
 
     for my $listen (@listen) {
         if ($listen =~ /^:(\d+)/) {
             my $port = $1;
-            $listen = "http://127.0.0.1:$port/";
+            $listen = "http://127.0.0.1:$port";
         }
         push @{$self->{listen_guards}}, $self->_create_tcp_server($listen, $app);
     }
